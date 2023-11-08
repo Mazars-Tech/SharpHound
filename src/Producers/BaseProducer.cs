@@ -5,6 +5,7 @@ using Sharphound.Client;
 using SharpHoundCommonLib;
 using SharpHoundCommonLib.Enums;
 using SharpHoundCommonLib.LDAPQueries;
+using SharpHoundCommonLib.OutputTypes;
 
 namespace Sharphound.Producers
 {
@@ -14,12 +15,14 @@ namespace Sharphound.Producers
     public abstract class BaseProducer
     {
         protected readonly Channel<ISearchResultEntry> Channel;
+        protected readonly Channel<OutputBase> OutputChannel;
         protected readonly IContext Context;
 
-        protected BaseProducer(IContext context, Channel<ISearchResultEntry> channel)
+        protected BaseProducer(IContext context, Channel<ISearchResultEntry> channel, Channel<OutputBase> outputChannel)
         {
             Context = context;
             Channel = channel;
+            OutputChannel = outputChannel;
         }
 
         public abstract Task Produce();
@@ -56,7 +59,9 @@ namespace Sharphound.Producers
                     (methods & ResolvedCollectionMethod.RDP) != 0 ||
                     (methods & ResolvedCollectionMethod.LoggedOn) != 0 ||
                     (methods & ResolvedCollectionMethod.Session) != 0 ||
-                    (methods & ResolvedCollectionMethod.ObjectProps) != 0)
+                    (methods & ResolvedCollectionMethod.ObjectProps) != 0 || 
+                    (methods & ResolvedCollectionMethod.UserRights) != 0)
+                    
                     props.AddRange(CommonProperties.ComputerMethodProps);
 
                 if ((methods & ResolvedCollectionMethod.Trusts) != 0) props.AddRange(CommonProperties.DomainTrustProps);
@@ -87,7 +92,8 @@ namespace Sharphound.Producers
                     (methods & ResolvedCollectionMethod.RDP) != 0 ||
                     (methods & ResolvedCollectionMethod.LoggedOn) != 0 ||
                     (methods & ResolvedCollectionMethod.Session) != 0 ||
-                    (methods & ResolvedCollectionMethod.ObjectProps) != 0)
+                    (methods & ResolvedCollectionMethod.ObjectProps) != 0 || 
+                    (methods & ResolvedCollectionMethod.UserRights) != 0)
                 {
                     query = query.AddComputers();
                     props.AddRange(CommonProperties.ComputerMethodProps);

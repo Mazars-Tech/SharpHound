@@ -10,6 +10,9 @@ using SharpHoundCommonLib;
 using SharpHoundCommonLib.Enums;
 using SharpHoundCommonLib.OutputTypes;
 using SharpHoundCommonLib.Processors;
+using Container = SharpHoundCommonLib.OutputTypes.Container;
+using Group = SharpHoundCommonLib.OutputTypes.Group;
+using Label = SharpHoundCommonLib.Enums.Label;
 
 namespace Sharphound.Runtime
 {
@@ -26,6 +29,8 @@ namespace Sharphound.Runtime
         private readonly GroupProcessor _groupProcessor;
         private readonly LDAPPropertyProcessor _ldapPropertyProcessor;
         private readonly GPOLocalGroupProcessor _gpoLocalGroupProcessor;
+        private readonly UserRightsAssignmentProcessor _userRightsAssignmentProcessor;
+        private readonly LocalGroupProcessor _localGroupProcessor;
         private readonly ILogger _log;
         private readonly ResolvedCollectionMethod _methods;
         private readonly SPNProcessors _spnProcessor;
@@ -42,6 +47,8 @@ namespace Sharphound.Runtime
             _groupProcessor = new GroupProcessor(context.LDAPUtils);
             _containerProcessor = new ContainerProcessor(context.LDAPUtils);
             _gpoLocalGroupProcessor = new GPOLocalGroupProcessor(context.LDAPUtils);
+            _userRightsAssignmentProcessor = new UserRightsAssignmentProcessor(context.LDAPUtils);
+            _localGroupProcessor = new LocalGroupProcessor(context.LDAPUtils);
             _methods = context.ResolvedCollectionMethods;
             _cancellationToken = context.CancellationTokenSource.Token;
             _log = log;
@@ -198,6 +205,7 @@ namespace Sharphound.Runtime
 
             if ((_methods & ResolvedCollectionMethod.Session) != 0)
             {
+                await _context.DoDelay();
                 var sessionResult = await _computerSessionProcessor.ReadUserSessions(apiName,
                     resolvedSearchResult.ObjectId, resolvedSearchResult.Domain);
                 ret.Sessions = sessionResult;
@@ -212,9 +220,12 @@ namespace Sharphound.Runtime
 
             if ((_methods & ResolvedCollectionMethod.LoggedOn) != 0)
             {
-                var privSessionResult = _computerSessionProcessor.ReadUserSessionsPrivileged(apiName,
-                    samAccountName, resolvedSearchResult.ObjectId);
+                await _context.DoDelay();
+                var privSessionResult = await _computerSessionProcessor.ReadUserSessionsPrivileged(
+                    resolvedSearchResult.DisplayName, samAccountName,
+                    resolvedSearchResult.ObjectId);
                 ret.PrivilegedSessions = privSessionResult;
+
                 if (_context.Flags.DumpComputerStatus)
                     await compStatusChannel.Writer.WriteAsync(new CSVComputerStatus
                     {
@@ -223,105 +234,40 @@ namespace Sharphound.Runtime
                         ComputerName = resolvedSearchResult.DisplayName
                     }, _cancellationToken);
 
-                var registrySessionResult = _computerSessionProcessor.ReadUserSessionsRegistry(apiName,
-                    resolvedSearchResult.Domain, resolvedSearchResult.ObjectId);
-                ret.RegistrySessions = registrySessionResult;
-                if (_context.Flags.DumpComputerStatus)
-                    await compStatusChannel.Writer.WriteAsync(new CSVComputerStatus
-                    {
-                        Status = privSessionResult.Collected ? StatusSuccess : privSessionResult.FailureReason,
-                        Task = "RegistrySessions",
-                        ComputerName = resolvedSearchResult.DisplayName
-                    }, _cancellationToken);
+                if (!_context.Flags.NoRegistryLoggedOn)
+                {
+                    await _context.DoDelay();
+                    var registrySessionResult = await _computerSessionProcessor.ReadUserSessionsRegistry(apiName,
+                        resolvedSearchResult.Domain, resolvedSearchResult.ObjectId);
+                    ret.RegistrySessions = registrySessionResult;
+                    if (_context.Flags.DumpComputerStatus)
+                        await compStatusChannel.Writer.WriteAsync(new CSVComputerStatus
+                        {
+                            Status = privSessionResult.Collected ? StatusSuccess : privSessionResult.FailureReason,
+                            Task = "RegistrySessions",
+                            ComputerName = resolvedSearchResult.DisplayName
+                        }, _cancellationToken);
+                }
+            }
+
+            if ((_methods & ResolvedCollectionMethod.UserRights) != 0)
+            {
+                await _context.DoDelay();
+                var userRights = _userRightsAssignmentProcessor.GetUserRightsAssignments(
+                                    resolvedSearchResult.DisplayName, resolvedSearchResult.ObjectId,
+                                    resolvedSearchResult.Domain, resolvedSearchResult.IsDomainController);
+                ret.UserRights = await userRights.ToArrayAsync();
             }
 
             if (!_methods.IsLocalGroupCollectionSet())
                 return ret;
 
-            try
-            {
-                using var server = new SAMRPCServer(resolvedSearchResult.DisplayName, samAccountName,
-                    resolvedSearchResult.ObjectId, resolvedSearchResult.Domain);
-                if ((_methods & ResolvedCollectionMethod.LocalAdmin) != 0)
-                {
-                    ret.LocalAdmins = server.GetLocalGroupMembers((int)LocalGroupRids.Administrators);
-                    if (_context.Flags.DumpComputerStatus)
-                        await compStatusChannel.Writer.WriteAsync(new CSVComputerStatus
-                        {
-                            Status = ret.LocalAdmins.Collected ? StatusSuccess : ret.LocalAdmins.FailureReason,
-                            Task = "AdminLocalGroup",
-                            ComputerName = resolvedSearchResult.DisplayName
-                        }, _cancellationToken);
-                }
-
-                if ((_methods & ResolvedCollectionMethod.DCOM) != 0)
-                {
-                    ret.DcomUsers = server.GetLocalGroupMembers((int)LocalGroupRids.DcomUsers);
-                    if (_context.Flags.DumpComputerStatus)
-                        await compStatusChannel.Writer.WriteAsync(new CSVComputerStatus
-                        {
-                            Status = ret.DcomUsers.Collected ? StatusSuccess : ret.DcomUsers.FailureReason,
-                            Task = "DCOMLocalGroup",
-                            ComputerName = resolvedSearchResult.DisplayName
-                        }, _cancellationToken);
-                }
-
-                if ((_methods & ResolvedCollectionMethod.PSRemote) != 0)
-                {
-                    ret.PSRemoteUsers = server.GetLocalGroupMembers((int)LocalGroupRids.PSRemote);
-                    if (_context.Flags.DumpComputerStatus)
-                        await compStatusChannel.Writer.WriteAsync(new CSVComputerStatus
-                        {
-                            Status = ret.PSRemoteUsers.Collected ? StatusSuccess : ret.PSRemoteUsers.FailureReason,
-                            Task = "PSRemoteLocalGroup",
-                            ComputerName = resolvedSearchResult.DisplayName
-                        }, _cancellationToken);
-                }
-
-                if ((_methods & ResolvedCollectionMethod.RDP) != 0)
-                {
-                    ret.RemoteDesktopUsers = server.GetLocalGroupMembers((int)LocalGroupRids.RemoteDesktopUsers);
-                    if (_context.Flags.DumpComputerStatus)
-                        await compStatusChannel.Writer.WriteAsync(new CSVComputerStatus
-                        {
-                            Status = ret.RemoteDesktopUsers.Collected
-                                ? StatusSuccess
-                                : ret.RemoteDesktopUsers.FailureReason,
-                            Task = "RDPLocalGroup",
-                            ComputerName = resolvedSearchResult.DisplayName
-                        });
-                }
-            }
-            catch (Exception e)
-            {
-                await compStatusChannel.Writer.WriteAsync(new CSVComputerStatus
-                {
-                    Status = e.ToString(),
-                    ComputerName = resolvedSearchResult.DisplayName,
-                    Task = "SAMRPCServerInit"
-                }, _cancellationToken);
-                ret.DcomUsers = new LocalGroupAPIResult
-                {
-                    Collected = false,
-                    FailureReason = "SAMRPCServerInit Failed"
-                };
-                ret.PSRemoteUsers = new LocalGroupAPIResult
-                {
-                    Collected = false,
-                    FailureReason = "SAMRPCServerInit Failed"
-                };
-                ret.LocalAdmins = new LocalGroupAPIResult
-                {
-                    Collected = false,
-                    FailureReason = "SAMRPCServerInit Failed"
-                };
-                ret.RemoteDesktopUsers = new LocalGroupAPIResult
-                {
-                    Collected = false,
-                    FailureReason = "SAMRPCServerInit Failed"
-                };
-            }
-
+            await _context.DoDelay();
+            var localGroups = _localGroupProcessor.GetLocalGroups(resolvedSearchResult.DisplayName,
+                resolvedSearchResult.ObjectId, resolvedSearchResult.Domain,
+                resolvedSearchResult.IsDomainController);
+            ret.LocalGroups = await localGroups.ToArrayAsync();
+            
             return ret;
         }
 
