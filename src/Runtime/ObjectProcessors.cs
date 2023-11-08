@@ -29,6 +29,7 @@ namespace Sharphound.Runtime
         private readonly GroupProcessor _groupProcessor;
         private readonly LDAPPropertyProcessor _ldapPropertyProcessor;
         private readonly GPOLocalGroupProcessor _gpoLocalGroupProcessor;
+        private readonly FGPPProcessor _fgppProcessor;
         private readonly UserRightsAssignmentProcessor _userRightsAssignmentProcessor;
         private readonly LocalGroupProcessor _localGroupProcessor;
         private readonly ILogger _log;
@@ -47,6 +48,7 @@ namespace Sharphound.Runtime
             _groupProcessor = new GroupProcessor(context.LDAPUtils);
             _containerProcessor = new ContainerProcessor(context.LDAPUtils);
             _gpoLocalGroupProcessor = new GPOLocalGroupProcessor(context.LDAPUtils);
+            _fgppProcessor = new FGPPProcessor(context.LDAPUtils);
             _userRightsAssignmentProcessor = new UserRightsAssignmentProcessor(context.LDAPUtils);
             _localGroupProcessor = new LocalGroupProcessor(context.LDAPUtils);
             _methods = context.ResolvedCollectionMethods;
@@ -133,6 +135,11 @@ namespace Sharphound.Runtime
                 while (await enumerator.MoveNextAsync()) targets.Add(enumerator.Current);
 
                 ret.SPNTargets = targets.ToArray();
+            }
+
+            if ((_methods & ResolvedCollectionMethod.GPOLocalGroup) != 0)
+            {
+                ret.FGPP = _fgppProcessor.GetFGPP(resolvedSearchResult.ObjectId, entry.DistinguishedName);
             }
 
             return ret;
