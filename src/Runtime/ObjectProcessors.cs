@@ -44,7 +44,7 @@ namespace Sharphound.Runtime
             _ldapPropertyProcessor = new LDAPPropertyProcessor(context.LDAPUtils);
             _domainTrustProcessor = new DomainTrustProcessor(context.LDAPUtils);
             _computerAvailability = new ComputerAvailability(context.PortScanTimeout, skipPortScan: context.Flags.SkipPortScan, skipPasswordCheck: context.Flags.SkipPasswordAgeCheck);
-            _computerSessionProcessor = new ComputerSessionProcessor(context.LDAPUtils, doLocalAdminSessionEnum: context.Flags.DoLocalAdminSessionEnum, localAdminUsername: context.LocalAdminUsername, localAdminPassword: context.LocalAdminPassword);
+            _computerSessionProcessor = new ComputerSessionProcessor(context.LDAPUtils);
             _groupProcessor = new GroupProcessor(context.LDAPUtils);
             _containerProcessor = new ContainerProcessor(context.LDAPUtils);
             _gpoLocalGroupProcessor = new GPOLocalGroupProcessor(context.LDAPUtils);
@@ -137,6 +137,11 @@ namespace Sharphound.Runtime
                 ret.SPNTargets = targets.ToArray();
             }
 
+            if ((_methods & ResolvedCollectionMethod.Container) != 0)
+            {
+                ret.ContainedBy = _containerProcessor.GetContainingObject(entry.DistinguishedName);
+            }
+
             if ((_methods & ResolvedCollectionMethod.GPOLocalGroup) != 0)
             {
                 ret.FGPP = _fgppProcessor.GetFGPP(resolvedSearchResult.ObjectId, entry.DistinguishedName);
@@ -190,6 +195,11 @@ namespace Sharphound.Runtime
                 ret.DumpSMSAPassword = computerProps.DumpSMSAPassword;
             }
 
+            if ((_methods & ResolvedCollectionMethod.Container) != 0)
+            {
+                ret.ContainedBy = _containerProcessor.GetContainingObject(entry.DistinguishedName);
+            }
+
             if (!_methods.IsComputerCollectionSet())
                 return ret;
 
@@ -207,8 +217,6 @@ namespace Sharphound.Runtime
             }
 
             var samAccountName = entry.GetProperty(LDAPProperties.SAMAccountName)?.TrimEnd('$');
-
-            await _context.DoDelay();
 
             if ((_methods & ResolvedCollectionMethod.Session) != 0)
             {
@@ -315,6 +323,11 @@ namespace Sharphound.Runtime
                 }
             }
 
+            if ((_methods & ResolvedCollectionMethod.Container) != 0)
+            {
+                ret.ContainedBy = _containerProcessor.GetContainingObject(entry.DistinguishedName);
+            }
+
             return ret;
         }
 
@@ -377,7 +390,6 @@ namespace Sharphound.Runtime
 
             if ((_methods & ResolvedCollectionMethod.Container) != 0)
             {
-                ret.ChildObjects = _containerProcessor.GetContainerChildObjects(resolvedSearchResult, entry).ToArray();
                 ret.Links = _containerProcessor.ReadContainerGPLinks(resolvedSearchResult, entry).ToArray();
             }
 
@@ -419,7 +431,6 @@ namespace Sharphound.Runtime
                         ret.Properties);
                 }
             }
-                
 
             return ret;
         }
@@ -456,7 +467,7 @@ namespace Sharphound.Runtime
 
             if ((_methods & ResolvedCollectionMethod.Container) != 0)
             {
-                ret.ChildObjects = _containerProcessor.GetContainerChildObjects(resolvedSearchResult, entry).ToArray();
+                ret.ContainedBy = _containerProcessor.GetContainingObject(entry.DistinguishedName);
                 ret.Properties.Add("blocksinheritance",
                     ContainerProcessor.ReadBlocksInheritance(entry.GetProperty("gpoptions")));
                 ret.Links = _containerProcessor.ReadContainerGPLinks(resolvedSearchResult, entry).ToArray();
@@ -486,7 +497,7 @@ namespace Sharphound.Runtime
             ret.Properties.Add("highvalue", false);
 
             if ((_methods & ResolvedCollectionMethod.Container) != 0)
-                ret.ChildObjects = _containerProcessor.GetContainerChildObjects(entry.DistinguishedName).ToArray();
+                ret.ContainedBy = _containerProcessor.GetContainingObject(entry.DistinguishedName);
 
             if ((_methods & ResolvedCollectionMethod.ACL) != 0)
             {

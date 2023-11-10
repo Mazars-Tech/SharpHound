@@ -14,6 +14,12 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <Compile Remove="backup\**" />
+      <EmbeddedResource Remove="backup\**" />
+      <None Remove="backup\**" />
+    </ItemGroup>
+
+    <ItemGroup>
         <PackageReference Include="CommandLineParser" Version="2.8.0" />
         <PackageReference Include="Costura.Fody" Version="5.7.0">
           <PrivateAssets>all</PrivateAssets>
@@ -24,12 +30,15 @@
         <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="5.0.0" />
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="5.0.0" />
         <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
-        <PackageReference Include="SharpHoundCommon" Version="3.0.8" />
-        <PackageReference Include="SharpHoundRPC" Version="3.0.8" />
         <PackageReference Include="SharpZipLib" Version="1.3.3" />
         <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.0.0" />
         <PackageReference Include="System.Threading.Channels" Version="6.0.0" />
         <PackageReference Include="System.ValueTuple" Version="4.5.0" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\..\maz-tech\SharpHoundCommon\src\CommonLib\SharpHoundCommonLib.csproj" />
+      <ProjectReference Include="..\..\maz-tech\SharpHoundCommon\src\SharpHoundRPC\SharpHoundRPC.csproj" />
     </ItemGroup>
 
     <ItemGroup>
