@@ -1,3 +1,7 @@
+---
+SharpHound Open Source Client version: 2.0.0
+---
+
 # SharpHound
 
 ![GitHub all releases](https://img.shields.io/github/downloads/BloodHoundAD/SharpHound/total)
@@ -110,6 +114,12 @@ dotnet build
   --loopinterval             Add delay between loops (hh:mm:ss - 00:03:00 is 3 minute)
 
   --statusinterval           (Default: 30000) Interval in which to display status in milliseconds
+
+  --localadminsessionenum    Specify if you want to use a dedicated LOCAL user for session enumeration
+
+  --localadminusername       Specify the username of the localadmin for session enumeration
+
+  --localadminpassword       Specify the password of the localadmin for session enumeration
 
   -v                         (Default: 2) Enable verbose output. Lower is more verbose
 

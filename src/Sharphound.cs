@@ -29,7 +29,6 @@ using Newtonsoft.Json;
 using Sharphound.Client;
 using Sharphound.Runtime;
 using SharpHoundCommonLib;
-using SharpHoundCommonLib.Processors;
 using Timer = System.Timers.Timer;
 
 namespace Sharphound
@@ -209,10 +208,8 @@ namespace Sharphound
         public IContext GetDomainsForEnumeration(IContext context)
         {
             context.Logger.LogTrace("Entering GetDomainsForEnumeration");
-            if (context.Flags.RecurseDomains) {
-                context.Logger.LogInformation("[RecurseDomains] Cross-domain enumeration may result in reduced data quality");
-                context.Domains = BuildRecursiveDomainList(context).ToArray();
-            } else if (context.Flags.SearchForest) {
+            if (context.Flags.SearchForest)
+            {
                 context.Logger.LogInformation("[SearchForest] Cross-domain enumeration may result in reduced data quality");
                 var forest = context.LDAPUtils.GetForest(context.DomainName);
                 if (forest == null)
@@ -222,75 +219,21 @@ namespace Sharphound
                     return context;
                 }
 
-                context.Domains = (from Domain d in forest.Domains select new EnumerationDomain()
-                {
-                    Name = d.Name,
-                    DomainSid = d.GetDirectoryEntry().GetSid(),
-                }).ToArray();
+                context.Domains = (from Domain d in forest.Domains select d.Name).ToArray();
                 context.Logger.LogInformation("Domains for enumeration: {Domains}", JsonConvert.SerializeObject(context.Domains));
                 return context;
             }
 
-            var domainObject = context.LDAPUtils.GetDomain(context.DomainName);
-            var domain = domainObject?.Name ?? context.DomainName;
+            var domain = context.LDAPUtils.GetDomain(context.DomainName)?.Name ?? context.DomainName;
             if (domain == null)
             {
-                context.Logger.LogError("Unable to resolve a domain to use, manually specify one or check spelling");
+                context.Logger.LogError("unable to resolve a domain to use, manually specify one or check spelling");
                 context.Flags.IsFaulted = true;
             }
             
-            context.Domains = new[] { new EnumerationDomain
-                {
-                    Name = domain,
-                    DomainSid = domainObject?.GetDirectoryEntry().GetSid() ?? "Unknown"
-                } 
-            };
+            context.Domains = new[] { domain };
             context.Logger.LogTrace("Exiting GetDomainsForEnumeration");
             return context;
-        }
-        
-        private IEnumerable<EnumerationDomain> BuildRecursiveDomainList(IContext context)
-        {
-            var domainResults = new List<EnumerationDomain>();
-            var enumeratedDomains = new HashSet<string>();
-            var enumerationQueue = new Queue<(string domainSid, string domainName)>();
-            var utils = context.LDAPUtils;
-            var log = context.Logger;
-            var domain = utils.GetDomain();
-            if (domain == null)
-                yield break;
-
-            var trustHelper = new DomainTrustProcessor(utils);
-            var dSid = domain.GetDirectoryEntry().GetSid();
-            var dName = domain.Name;
-            enumerationQueue.Enqueue((dSid, dName));
-            domainResults.Add(new EnumerationDomain
-            {
-                Name = dName.ToUpper(),
-                DomainSid = dSid.ToUpper()
-            });
-
-            while (enumerationQueue.Count > 0)
-            {
-                var (domainSid, domainName) = enumerationQueue.Dequeue();
-                enumeratedDomains.Add(domainSid.ToUpper());
-                foreach (var trust in trustHelper.EnumerateDomainTrusts(domainName))
-                {
-                    log.LogDebug("Got trusted domain {Name} with sid {Sid} and {Type}", trust.TargetDomainName.ToUpper(),
-                        trust.TargetDomainSid.ToUpper(), trust.TrustType.ToString());
-                    domainResults.Add(new EnumerationDomain
-                    {
-                        Name = trust.TargetDomainName.ToUpper(),
-                        DomainSid = trust.TargetDomainSid.ToUpper()
-                    });
-
-                    if (!enumeratedDomains.Contains(trust.TargetDomainSid))
-                        enumerationQueue.Enqueue((trust.TargetDomainSid, trust.TargetDomainName));
-                }
-            }
-
-            foreach (var domainResult in domainResults.GroupBy(x => x.DomainSid).Select(x => x.First()))
-                yield return domainResult;
         }
 
         public IContext StartBaseCollectionTask(IContext context)
@@ -392,7 +335,6 @@ namespace Sharphound
         public static async Task Main(string[] args)
         {
             var logger = new BasicLogger((int)LogLevel.Information);
-            logger.LogInformation("This version of SharpHound is compatible with the 5.0.0 Release of BloodHound");
             try
             {
                 var parser = new Parser(with =>
@@ -429,7 +371,7 @@ namespace Sharphound
                         DCOnly = dconly,
                         PrettyPrint = options.PrettyPrint,
                         SearchForest = options.SearchForest,
-                        RecurseDomains = options.RecurseDomains
+                        DoLocalAdminSessionEnum = options.DoLocalAdminSessionEnum,
                     };
 
                     var ldapOptions = new LDAPConfig
@@ -454,7 +396,38 @@ namespace Sharphound
                         ldapOptions.Username = options.LDAPUsername;
                         ldapOptions.Password = options.LDAPPassword;
                     }
+                    
+                    // Check to make sure both Local Admin Session Enum options are set if either is set
 
+                    if (options.LocalAdminPassword != null && options.LocalAdminUsername == null ||
+                        options.LocalAdminUsername != null && options.LocalAdminPassword == null)
+                    {
+                        logger.LogError("You must specify both LocalAdminUsername and LocalAdminPassword if using these options!");
+                        return;
+                    }
+
+                    // Check to make sure doLocalAdminSessionEnum is set when specifying localadmin and password
+
+                    if (options.LocalAdminPassword != null || options.LocalAdminUsername != null)
+                    {
+                        if (options.DoLocalAdminSessionEnum == false)
+                        {
+                            logger.LogError("You must use the --doLocalAdminSessionEnum switch in combination with --LocalAdminUsername and --LocalAdminPassword!");
+                            return;
+                        }
+                    }
+
+                    // Check to make sure LocalAdminUsername and LocalAdminPassword are set when using doLocalAdminSessionEnum
+
+                    if (options.DoLocalAdminSessionEnum == true)
+                    {
+                        if (options.LocalAdminPassword == null || options.LocalAdminUsername == null)
+                        {
+                            logger.LogError("You must specify both LocalAdminUsername and LocalAdminPassword if using the --doLocalAdminSessionEnum option!");
+                            return;
+                        }
+                    }
+                    
                     IContext context = new BaseContext(logger, ldapOptions, flags)
                     {
                         DomainName = options.Domain,
@@ -475,7 +448,10 @@ namespace Sharphound
                         LoopDuration = options.LoopDuration,
                         LoopInterval = options.LoopInterval,
                         ZipPassword = options.ZipPassword,
-                        IsFaulted = false
+                        IsFaulted = false,
+                        LocalAdminUsername = options.LocalAdminUsername,
+                        LocalAdminPassword = options.LocalAdminPassword
+
                     };
 
                     var cancellationTokenSource = new CancellationTokenSource();
