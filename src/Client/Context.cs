@@ -58,10 +58,6 @@ namespace Sharphound.Client
         int Jitter { get; set; }
         int PortScanTimeout { get; set; }
 
-        public string LocalAdminUsername { get; set; }
-
-        public string LocalAdminPassword { get; set; }
-
         ResolvedCollectionMethod ResolvedCollectionMethods { get; set; }
 
         /// <summary>

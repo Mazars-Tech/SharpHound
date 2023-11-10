@@ -1,6 +1,4 @@
-﻿using SharpHoundCommonLib.OutputTypes;
-
-namespace Sharphound.Client
+﻿namespace Sharphound.Client
 {
     public class Flags
     {
@@ -25,6 +23,6 @@ namespace Sharphound.Client
         public bool DCOnly { get; set; }
         public bool PrettyPrint { get; set; }
         public bool SearchForest { get; set; }
-        public bool DoLocalAdminSessionEnum { get; set; }
+        public bool RecurseDomains { get; set; }
     }
 }
