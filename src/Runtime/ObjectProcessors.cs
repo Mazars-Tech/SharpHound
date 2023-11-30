@@ -387,6 +387,7 @@ namespace Sharphound.Runtime
                         ret.Properties);
                     ret.DNSProperty = _ldapPropertyProcessor.GetDNSProperties(entry, entry.DistinguishedName.ToUpper());
                     ret.DisplaySpecifierScripts = _ldapPropertyProcessor.GetDisplaySpecifierScripts(entry.DistinguishedName.ToUpper());
+                    ret.Properties.Add("dcstate", _ldapPropertyProcessor.GetDCState(entry.DistinguishedName.ToUpper()));
                 }
             }
 
