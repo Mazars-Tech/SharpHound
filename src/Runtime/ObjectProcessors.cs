@@ -144,7 +144,7 @@ namespace Sharphound.Runtime
 
             if ((_methods & ResolvedCollectionMethod.GPOLocalGroup) != 0)
             {
-                ret.FGPP = _fgppProcessor.GetFGPP(resolvedSearchResult.ObjectId, entry.DistinguishedName);
+                ret.Properties.Add("fgpp", _fgppProcessor.GetFGPP(resolvedSearchResult.ObjectId, entry.DistinguishedName));
             }
 
             return ret;
@@ -383,10 +383,9 @@ namespace Sharphound.Runtime
                 ret.Properties = ContextUtils.Merge(ret.Properties, LDAPPropertyProcessor.ReadDomainProperties(entry));
                 if (_context.Flags.CollectAllProperties)
                 {
-                    ret.Properties = ContextUtils.Merge(_ldapPropertyProcessor.ParseAllProperties(entry),
-                        ret.Properties);
-                    ret.DNSProperty = _ldapPropertyProcessor.GetDNSProperties(entry, entry.DistinguishedName.ToUpper());
-                    ret.DisplaySpecifierScripts = _ldapPropertyProcessor.GetDisplaySpecifierScripts(entry.DistinguishedName.ToUpper());
+                    ret.Properties = ContextUtils.Merge(_ldapPropertyProcessor.ParseAllProperties(entry), ret.Properties);
+                    ret.Properties.Add("dnsproperties", _ldapPropertyProcessor.GetDNSProperties(entry, entry.DistinguishedName.ToUpper()));
+                    ret.Properties.Add("displayspecifiers", _ldapPropertyProcessor.GetDisplaySpecifierScripts(entry.DistinguishedName.ToUpper()));
                     ret.Properties.Add("dcstate", _ldapPropertyProcessor.GetDCState(entry.DistinguishedName.ToUpper()));
                 }
             }
