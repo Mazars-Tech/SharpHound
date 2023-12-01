@@ -384,7 +384,7 @@ namespace Sharphound.Runtime
                 if (_context.Flags.CollectAllProperties)
                 {
                     ret.Properties = ContextUtils.Merge(_ldapPropertyProcessor.ParseAllProperties(entry), ret.Properties);
-                    ret.Properties.Add("dnsproperties", _ldapPropertyProcessor.GetDNSProperties(entry, entry.DistinguishedName.ToUpper()));
+                    ret.Properties.Add("dnsproperties", _ldapPropertyProcessor.GetDNSProperties(entry.DistinguishedName.ToUpper()));
                     ret.Properties = ContextUtils.Merge(ret.Properties, _ldapPropertyProcessor.GetConfigNamingContextInfo(entry.DistinguishedName.ToUpper()));
                 }
             }
