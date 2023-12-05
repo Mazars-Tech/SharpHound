@@ -44,7 +44,7 @@ namespace Sharphound.Runtime
             _ldapPropertyProcessor = new LDAPPropertyProcessor(context.LDAPUtils);
             _domainTrustProcessor = new DomainTrustProcessor(context.LDAPUtils);
             _computerAvailability = new ComputerAvailability(context.PortScanTimeout, skipPortScan: context.Flags.SkipPortScan, skipPasswordCheck: context.Flags.SkipPasswordAgeCheck);
-            _computerSessionProcessor = new ComputerSessionProcessor(context.LDAPUtils);
+            _computerSessionProcessor = new ComputerSessionProcessor(context.LDAPUtils, doLocalAdminSessionEnum: context.Flags.DoLocalAdminSessionEnum, localAdminUsername: context.LocalAdminUsername, localAdminPassword: context.LocalAdminPassword);
             _groupProcessor = new GroupProcessor(context.LDAPUtils);
             _containerProcessor = new ContainerProcessor(context.LDAPUtils);
             _gpoLocalGroupProcessor = new GPOLocalGroupProcessor(context.LDAPUtils);
@@ -194,6 +194,11 @@ namespace Sharphound.Runtime
                 ret.HasSIDHistory = computerProps.SidHistory;
                 ret.DumpSMSAPassword = computerProps.DumpSMSAPassword;
                 ret.Properties.Add("msds-keycredentiallink", _ldapPropertyProcessor.GetShadowCredentials(entry.DistinguishedName.ToUpper()));
+            }
+
+            if ((_methods & ResolvedCollectionMethod.Container) != 0)
+            {
+                ret.ContainedBy = _containerProcessor.GetContainingObject(entry.DistinguishedName);
             }
 
             if ((_methods & ResolvedCollectionMethod.Container) != 0)
