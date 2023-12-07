@@ -193,7 +193,7 @@ namespace Sharphound.Runtime
                 ret.AllowedToAct = computerProps.AllowedToAct;
                 ret.HasSIDHistory = computerProps.SidHistory;
                 ret.DumpSMSAPassword = computerProps.DumpSMSAPassword;
-                ret.Properties.Add("msds-keycredentiallink", _ldapPropertyProcessor.GetShadowCredentials());
+                ret.Properties["msds-keycredentiallink"] = _ldapPropertyProcessor.GetShadowCredentials();
             }
 
             if ((_methods & ResolvedCollectionMethod.Container) != 0)
