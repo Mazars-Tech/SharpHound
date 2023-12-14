@@ -122,6 +122,7 @@ namespace Sharphound.Runtime
                 }
                 ret.HasSIDHistory = userProps.SidHistory;
                 ret.AllowedToDelegate = userProps.AllowedToDelegate;
+                ret.Properties.Add("msds_keycredentiallink", _ldapPropertyProcessor.GetShadowCredentials());
             }
 
             if ((_methods & ResolvedCollectionMethod.SPNTargets) != 0)
@@ -193,7 +194,8 @@ namespace Sharphound.Runtime
                 ret.AllowedToAct = computerProps.AllowedToAct;
                 ret.HasSIDHistory = computerProps.SidHistory;
                 ret.DumpSMSAPassword = computerProps.DumpSMSAPassword;
-                ret.Properties["msds-keycredentiallink"] = _ldapPropertyProcessor.GetShadowCredentials();
+                ret.Properties.Add("msds_keycredentiallink", _ldapPropertyProcessor.GetShadowCredentials());
+                ret.Properties.Add("dcstate", _ldapPropertyProcessor.GetDCState(entry.DistinguishedName.ToUpper()));
             }
 
             if ((_methods & ResolvedCollectionMethod.Container) != 0)
@@ -392,7 +394,7 @@ namespace Sharphound.Runtime
                     ret.Properties = ContextUtils.Merge(_ldapPropertyProcessor.ParseAllProperties(entry), ret.Properties);
                 }
                 ret.Properties.Add("dnsproperties", _ldapPropertyProcessor.GetDNSProperties(entry.DistinguishedName.ToUpper()));
-                ret.Properties = ContextUtils.Merge(ret.Properties, _ldapPropertyProcessor.GetConfigNamingContextInfo(entry.DistinguishedName.ToUpper()));
+                ret.Properties.Add("displayspecifierscripts", _ldapPropertyProcessor.GetDisplaySpecifierScripts(entry.DistinguishedName.ToUpper()));
             }
 
             if ((_methods & ResolvedCollectionMethod.Container) != 0)
