@@ -22,6 +22,7 @@ namespace Sharphound.Runtime
         private readonly OutputWriter _outputWriter;
         private readonly BaseProducer _producer;
         private readonly List<Task> _taskPool = new();
+        private const string EnterpriseDCSuffix = "S-1-5-9";
 
         public CollectionTask(IContext context)
         {
@@ -69,8 +70,11 @@ namespace Sharphound.Runtime
             _outputWriter.StartStatusOutput();
             var compStatusTask = _compStatusWriter?.StartWriter();
             var producerTask = _producer.Produce();
-
             await producerTask;
+
+            // Collect from Configuration NC
+            var producerTaskNC = _producer.ProduceConfigNC();
+            await producerTaskNC;
 
             _log.LogInformation("Producer has finished, closing LDAP channel");
             _ldapChannel.Writer.Complete();
@@ -79,7 +83,19 @@ namespace Sharphound.Runtime
             _log.LogInformation("Consumers finished, closing output channel");
 
             foreach (var wkp in _context.LDAPUtils.GetWellKnownPrincipalOutput(_context.DomainName))
+            {
+                if (!wkp.ObjectIdentifier.EndsWith(EnterpriseDCSuffix))
+                {
+                    wkp.Properties["reconcile"] = false;
+                }
+                else if (wkp is Group g && g.Members.Length == 0)
+                {
+                    continue;
+                }
+
                 await _outputChannel.Writer.WriteAsync(wkp);
+            }
+                
 
             _outputChannel.Writer.Complete();
             _compStatusChannel?.Writer.Complete();

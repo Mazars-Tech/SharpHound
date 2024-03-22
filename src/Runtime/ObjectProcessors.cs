@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -20,11 +21,13 @@ namespace Sharphound.Runtime
     {
         private const string StatusSuccess = "Success";
         private readonly ACLProcessor _aclProcessor;
+        private readonly CertAbuseProcessor _certAbuseProcessor;
         private readonly CancellationToken _cancellationToken;
         private readonly ComputerAvailability _computerAvailability;
         private readonly ComputerSessionProcessor _computerSessionProcessor;
         private readonly ContainerProcessor _containerProcessor;
         private readonly IContext _context;
+        private readonly DCRegistryProcessor _dCRegistryProcessor;
         private readonly DomainTrustProcessor _domainTrustProcessor;
         private readonly GroupProcessor _groupProcessor;
         private readonly LDAPPropertyProcessor _ldapPropertyProcessor;
@@ -44,6 +47,8 @@ namespace Sharphound.Runtime
             _ldapPropertyProcessor = new LDAPPropertyProcessor(context.LDAPUtils);
             _domainTrustProcessor = new DomainTrustProcessor(context.LDAPUtils);
             _computerAvailability = new ComputerAvailability(context.PortScanTimeout, skipPortScan: context.Flags.SkipPortScan, skipPasswordCheck: context.Flags.SkipPasswordAgeCheck);
+            _certAbuseProcessor = new CertAbuseProcessor(context.LDAPUtils);
+            _dCRegistryProcessor = new DCRegistryProcessor(context.LDAPUtils);
             _computerSessionProcessor = new ComputerSessionProcessor(context.LDAPUtils, doLocalAdminSessionEnum: context.Flags.DoLocalAdminSessionEnum, localAdminUsername: context.LocalAdminUsername, localAdminPassword: context.LocalAdminPassword);
             _groupProcessor = new GroupProcessor(context.LDAPUtils);
             _containerProcessor = new ContainerProcessor(context.LDAPUtils);
@@ -74,7 +79,18 @@ namespace Sharphound.Runtime
                 case Label.OU:
                     return await ProcessOUObject(entry, resolvedSearchResult);
                 case Label.Container:
+                case Label.Configuration:
                     return ProcessContainerObject(entry, resolvedSearchResult);
+                case Label.RootCA:
+                    return await ProcessRootCA(entry, resolvedSearchResult);
+                case Label.AIACA:
+                    return await ProcessAIACA(entry, resolvedSearchResult);
+                case Label.EnterpriseCA:
+                    return await ProcessEnterpriseCA(entry, resolvedSearchResult);
+                case Label.NTAuthStore:
+                    return await ProcessNTAuthStore(entry, resolvedSearchResult);
+                case Label.CertTemplate:
+                    return await ProcessCertTemplate(entry, resolvedSearchResult);
                 case Label.Base:
                     return null;
                 default:
@@ -94,8 +110,11 @@ namespace Sharphound.Runtime
             ret.Properties.Add("name", resolvedSearchResult.DisplayName);
             ret.Properties.Add("distinguishedname", entry.DistinguishedName.ToUpper());
             ret.Properties.Add("domainsid", resolvedSearchResult.DomainSid);
-            ret.Properties.Add("highvalue", false);
             ret.Properties.Add("samaccountname", entry.GetProperty(LDAPProperties.SAMAccountName));
+            
+            if (entry.IsMSA()) ret.Properties.Add("msa", true);
+
+            if (entry.IsGMSA()) ret.Properties.Add("gmsa", true);
 
             if ((_methods & ResolvedCollectionMethod.ACL) != 0)
             {
@@ -103,6 +122,7 @@ namespace Sharphound.Runtime
                 var gmsa = entry.GetByteProperty(LDAPProperties.GroupMSAMembership);
                 ret.Aces = aces.Concat(_aclProcessor.ProcessGMSAReaders(gmsa, resolvedSearchResult.Domain)).ToArray();
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
+                ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
 
             if ((_methods & ResolvedCollectionMethod.Group) != 0)
@@ -163,16 +183,18 @@ namespace Sharphound.Runtime
             ret.Properties.Add("name", resolvedSearchResult.DisplayName);
             ret.Properties.Add("distinguishedname", entry.DistinguishedName.ToUpper());
             ret.Properties.Add("domainsid", resolvedSearchResult.DomainSid);
-            ret.Properties.Add("highvalue", false);
             ret.Properties.Add("samaccountname", entry.GetProperty(LDAPProperties.SAMAccountName));
 
             var hasLaps = entry.HasLAPS();
             ret.Properties.Add("haslaps", hasLaps);
+            ret.IsDC = resolvedSearchResult.IsDomainController;
+            ret.DomainSID = resolvedSearchResult.DomainSid;
 
             if ((_methods & ResolvedCollectionMethod.ACL) != 0)
             {
                 ret.Aces = _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArray();
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
+                ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
 
             if ((_methods & ResolvedCollectionMethod.Group) != 0)
@@ -221,7 +243,21 @@ namespace Sharphound.Runtime
             {
                 await compStatusChannel.Writer.WriteAsync(availability.GetCSVStatus(resolvedSearchResult.DisplayName),
                     _cancellationToken);
+                ret.Status = availability;
                 return ret;
+            }
+
+            // DCRegistry
+            if (resolvedSearchResult.IsDomainController &
+                (_methods & ResolvedCollectionMethod.DCRegistry) != 0)
+            {
+                DCRegistryData dCRegistryData = new()
+                {
+                    CertificateMappingMethods = _dCRegistryProcessor.GetCertificateMappingMethods(apiName),
+                    StrongCertificateBindingEnforcement = _dCRegistryProcessor.GetStrongCertificateBindingEnforcement(apiName)
+                };
+
+                ret.DCRegistryData = dCRegistryData;
             }
 
             var samAccountName = entry.GetProperty(LDAPProperties.SAMAccountName)?.TrimEnd('$');
@@ -290,7 +326,7 @@ namespace Sharphound.Runtime
                 resolvedSearchResult.ObjectId, resolvedSearchResult.Domain,
                 resolvedSearchResult.IsDomainController);
             ret.LocalGroups = await localGroups.ToArrayAsync();
-            
+
             return ret;
         }
 
@@ -306,13 +342,13 @@ namespace Sharphound.Runtime
             ret.Properties.Add("name", resolvedSearchResult.DisplayName);
             ret.Properties.Add("distinguishedname", entry.DistinguishedName.ToUpper());
             ret.Properties.Add("domainsid", resolvedSearchResult.DomainSid);
-            ret.Properties.Add("highvalue", IsHighValueGroup(resolvedSearchResult.ObjectId));
             ret.Properties.Add("samaccountname", entry.GetProperty(LDAPProperties.SAMAccountName));
 
             if ((_methods & ResolvedCollectionMethod.ACL) != 0)
             {
                 ret.Aces = _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArray();
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
+                ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
 
             if ((_methods & ResolvedCollectionMethod.Group) != 0)
@@ -339,30 +375,6 @@ namespace Sharphound.Runtime
             return ret;
         }
 
-        private bool IsHighValueGroup(string objectId)
-        {
-            // TODO: replace w/ a more definitive/centralized list
-            var suffixes = new string []
-            {
-                "-512",
-                "-516",
-                "-519",
-                "S-1-5-32-544",
-                "S-1-5-32-548",
-                "S-1-5-32-549",
-                "S-1-5-32-550",
-                "S-1-5-32-551",
-            };
-            foreach (var suffix in suffixes)
-            {
-                if (objectId.EndsWith(suffix))
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-
         private async Task<Domain> ProcessDomainObject(ISearchResultEntry entry,
             ResolvedSearchResult resolvedSearchResult)
         {
@@ -375,12 +387,12 @@ namespace Sharphound.Runtime
             ret.Properties.Add("name", resolvedSearchResult.DisplayName);
             ret.Properties.Add("distinguishedname", entry.DistinguishedName.ToUpper());
             ret.Properties.Add("domainsid", resolvedSearchResult.DomainSid);
-            ret.Properties.Add("highvalue", true);
 
             if ((_methods & ResolvedCollectionMethod.ACL) != 0)
             {
                 ret.Aces = _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArray();
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
+                ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
 
             if ((_methods & ResolvedCollectionMethod.Trusts) != 0)
@@ -423,12 +435,12 @@ namespace Sharphound.Runtime
             ret.Properties.Add("name", resolvedSearchResult.DisplayName);
             ret.Properties.Add("distinguishedname", entry.DistinguishedName.ToUpper());
             ret.Properties.Add("domainsid", resolvedSearchResult.DomainSid);
-            ret.Properties.Add("highvalue", false);
 
             if ((_methods & ResolvedCollectionMethod.ACL) != 0)
             {
                 ret.Aces = _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArray();
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
+                ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
 
             if ((_methods & ResolvedCollectionMethod.ObjectProps) != 0)
@@ -456,12 +468,12 @@ namespace Sharphound.Runtime
             ret.Properties.Add("name", resolvedSearchResult.DisplayName);
             ret.Properties.Add("distinguishedname", entry.DistinguishedName.ToUpper());
             ret.Properties.Add("domainsid", resolvedSearchResult.DomainSid);
-            ret.Properties.Add("highvalue", false);
 
             if ((_methods & ResolvedCollectionMethod.ACL) != 0)
             {
                 ret.Aces = _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArray();
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
+                ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
 
             if ((_methods & ResolvedCollectionMethod.ObjectProps) != 0)
@@ -503,19 +515,19 @@ namespace Sharphound.Runtime
             ret.Properties.Add("name", resolvedSearchResult.DisplayName);
             ret.Properties.Add("distinguishedname", entry.DistinguishedName.ToUpper());
             ret.Properties.Add("domainsid", resolvedSearchResult.DomainSid);
-            ret.Properties.Add("highvalue", false);
 
-            if ((_methods & ResolvedCollectionMethod.Container) != 0)
+            if ((_methods & ResolvedCollectionMethod.Container) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
                 ret.ContainedBy = _containerProcessor.GetContainingObject(entry.DistinguishedName);
 
-            if ((_methods & ResolvedCollectionMethod.ACL) != 0)
+            if ((_methods & ResolvedCollectionMethod.ACL) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
             {
                 ret.Aces = _aclProcessor.ProcessACL(resolvedSearchResult, entry)
                     .ToArray();
                 ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
+                ret.Properties.Add("isaclprotected", ret.IsACLProtected);
             }
 
-            if ((_methods & ResolvedCollectionMethod.ObjectProps) != 0)
+            if ((_methods & ResolvedCollectionMethod.ObjectProps) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
             {
                 if (_context.Flags.CollectAllProperties)
                 {
@@ -523,7 +535,225 @@ namespace Sharphound.Runtime
                         ret.Properties);
                 }
             }
-                
+
+
+            return ret;
+        }
+
+        private async Task<RootCA> ProcessRootCA(ISearchResultEntry entry, ResolvedSearchResult resolvedSearchResult)
+        {
+            var ret = new RootCA
+            {
+                ObjectIdentifier = resolvedSearchResult.ObjectId,
+                DomainSID = resolvedSearchResult.DomainSid
+            };
+
+            ret.Properties.Add("domain", resolvedSearchResult.Domain);
+            ret.Properties.Add("name", resolvedSearchResult.DisplayName);
+            ret.Properties.Add("distinguishedname", entry.DistinguishedName.ToUpper());
+            ret.Properties.Add("domainsid", resolvedSearchResult.DomainSid);
+            
+
+            if ((_methods & ResolvedCollectionMethod.ACL) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
+            {
+                ret.Aces = _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArray();
+                ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
+                ret.Properties.Add("isaclprotected", ret.IsACLProtected);
+            }
+
+            if ((_methods & ResolvedCollectionMethod.ObjectProps) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
+            {
+                var props = LDAPPropertyProcessor.ReadRootCAProperties(entry);
+                ret.Properties.Merge(props);
+            }
+
+            if ((_methods & ResolvedCollectionMethod.Container) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
+            {
+                ret.ContainedBy = _containerProcessor.GetContainingObject(entry.DistinguishedName);
+            }
+
+            return ret;
+        }
+
+        private async Task<AIACA> ProcessAIACA(ISearchResultEntry entry, ResolvedSearchResult resolvedSearchResult)
+        {
+            var ret = new AIACA
+            {
+                ObjectIdentifier = resolvedSearchResult.ObjectId
+            };
+
+            ret.Properties.Add("domain", resolvedSearchResult.Domain);
+            ret.Properties.Add("name", resolvedSearchResult.DisplayName);
+            ret.Properties.Add("distinguishedname", entry.DistinguishedName.ToUpper());
+            ret.Properties.Add("domainsid", resolvedSearchResult.DomainSid);
+
+            if ((_methods & ResolvedCollectionMethod.ACL) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
+            {
+                ret.Aces = _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArray();
+                ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
+                ret.Properties.Add("isaclprotected", ret.IsACLProtected);
+            }
+
+            if ((_methods & ResolvedCollectionMethod.ObjectProps) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
+            {
+                var props = LDAPPropertyProcessor.ReadAIACAProperties(entry);
+                ret.Properties.Merge(props);
+            }
+
+            if ((_methods & ResolvedCollectionMethod.Container) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
+            {
+                ret.ContainedBy = _containerProcessor.GetContainingObject(entry.DistinguishedName);
+            }
+
+            return ret;
+        }
+
+        private async Task<EnterpriseCA> ProcessEnterpriseCA(ISearchResultEntry entry, ResolvedSearchResult resolvedSearchResult)
+        {
+            var ret = new EnterpriseCA
+            {
+                ObjectIdentifier = resolvedSearchResult.ObjectId,
+            };
+
+            ret.Properties.Add("domain", resolvedSearchResult.Domain);
+            ret.Properties.Add("name", resolvedSearchResult.DisplayName);
+            ret.Properties.Add("distinguishedname", entry.DistinguishedName.ToUpper());
+            ret.Properties.Add("domainsid", resolvedSearchResult.DomainSid);
+
+            if ((_methods & ResolvedCollectionMethod.ACL) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
+            {
+                ret.Aces = _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArray();
+                ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
+                ret.Properties.Add("isaclprotected", ret.IsACLProtected);
+            }
+
+            if ((_methods & ResolvedCollectionMethod.ObjectProps) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
+            {
+                var props = LDAPPropertyProcessor.ReadEnterpriseCAProperties(entry);
+                ret.Properties.Merge(props);
+
+                // Enabled cert templates
+                ret.EnabledCertTemplates = _certAbuseProcessor.ProcessCertTemplates(entry.GetArrayProperty(LDAPProperties.CertificateTemplates), resolvedSearchResult.Domain).ToArray();
+            }
+
+            if ((_methods & ResolvedCollectionMethod.Container) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
+            {
+                ret.ContainedBy = _containerProcessor.GetContainingObject(entry.DistinguishedName);
+            }
+
+            if ((_methods & ResolvedCollectionMethod.CARegistry) != 0)
+            {
+                 // Collect properties from CA server registry
+                var cASecurityCollected = false;
+                var enrollmentAgentRestrictionsCollected = false;
+                var isUserSpecifiesSanEnabledCollected = false;
+                var caName = entry.GetProperty(LDAPProperties.Name);
+                var dnsHostName = entry.GetProperty(LDAPProperties.DNSHostName);
+                if ((_methods & ResolvedCollectionMethod.CARegistry) != 0 && caName != null && dnsHostName != null)
+                {
+                    ret.HostingComputer = await _context.LDAPUtils.ResolveHostToSid(dnsHostName, resolvedSearchResult.Domain);
+
+                    // If ResolveHostToSid does not return a valid SID, we don't want to record this host
+                    if (ret.HostingComputer != null && !ret.HostingComputer.StartsWith("S-1-"))
+                    {
+                        _log.LogWarning("CA host could not be resolved to a SID.", dnsHostName, resolvedSearchResult.Domain);
+                        ret.HostingComputer = null;
+                    }
+
+                    CARegistryData cARegistryData = new()
+                    {
+                        IsUserSpecifiesSanEnabled = _certAbuseProcessor.IsUserSpecifiesSanEnabled(dnsHostName, caName),
+                        EnrollmentAgentRestrictions = await _certAbuseProcessor.ProcessEAPermissions(caName, resolvedSearchResult.Domain, dnsHostName, ret.HostingComputer),
+
+                        // The CASecurity exist in the AD object DACL and in registry of the CA server. We prefer to use the values from registry as they are the ground truth.
+                        // If changes are made on the CA server, registry and the AD object is updated. If changes are made directly on the AD object, the CA server registry is not updated.
+                        CASecurity = await _certAbuseProcessor.ProcessRegistryEnrollmentPermissions(caName, resolvedSearchResult.Domain, dnsHostName, ret.HostingComputer)
+                    };
+
+                    cASecurityCollected = cARegistryData.CASecurity.Collected;
+                    enrollmentAgentRestrictionsCollected = cARegistryData.EnrollmentAgentRestrictions.Collected;
+                    isUserSpecifiesSanEnabledCollected = cARegistryData.IsUserSpecifiesSanEnabled.Collected;
+                    ret.CARegistryData = cARegistryData;
+                }
+
+                ret.Properties.Add("casecuritycollected", cASecurityCollected);
+                ret.Properties.Add("enrollmentagentrestrictionscollected", enrollmentAgentRestrictionsCollected);
+                ret.Properties.Add("isuserspecifiessanenabledcollected", isUserSpecifiesSanEnabledCollected);
+            }
+            
+            return ret;
+        }
+
+        private async Task<NTAuthStore> ProcessNTAuthStore(ISearchResultEntry entry, ResolvedSearchResult resolvedSearchResult)
+        {
+            var ret = new NTAuthStore
+            {
+                ObjectIdentifier = resolvedSearchResult.ObjectId,
+                DomainSID = resolvedSearchResult.DomainSid
+            };
+
+            ret.Properties.Add("domain", resolvedSearchResult.Domain);
+            ret.Properties.Add("name", resolvedSearchResult.DisplayName);
+            ret.Properties.Add("distinguishedname", entry.DistinguishedName.ToUpper());
+            ret.Properties.Add("domainsid", resolvedSearchResult.DomainSid);
+
+            if ((_methods & ResolvedCollectionMethod.ACL) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
+            {
+                ret.Aces = _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArray();
+                ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
+                ret.Properties.Add("isaclprotected", ret.IsACLProtected);
+            }
+
+            if ((_methods & ResolvedCollectionMethod.ObjectProps) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
+            {
+                var props = LDAPPropertyProcessor.ReadNTAuthStoreProperties(entry);
+
+                // Cert thumbprints
+                var rawCertificates = entry.GetByteArrayProperty(LDAPProperties.CACertificate);
+                var certificates = from rawCertificate in rawCertificates
+                                   select new X509Certificate2(rawCertificate).Thumbprint;
+                ret.Properties.Add("certthumbprints", certificates.ToArray());
+
+                ret.Properties.Merge(props);
+            }
+
+            if ((_methods & ResolvedCollectionMethod.Container) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
+            {
+                ret.ContainedBy = _containerProcessor.GetContainingObject(entry.DistinguishedName);
+            }
+
+            return ret;
+        }
+
+        private async Task<CertTemplate> ProcessCertTemplate(ISearchResultEntry entry, ResolvedSearchResult resolvedSearchResult)
+        {
+            var ret = new CertTemplate
+            {
+                ObjectIdentifier = resolvedSearchResult.ObjectId
+            };
+
+            ret.Properties.Add("domain", resolvedSearchResult.Domain);
+            ret.Properties.Add("name", resolvedSearchResult.DisplayName);
+            ret.Properties.Add("distinguishedname", entry.DistinguishedName.ToUpper());
+            ret.Properties.Add("domainsid", resolvedSearchResult.DomainSid);
+
+            if ((_methods & ResolvedCollectionMethod.ACL) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
+            {
+                ret.Aces = _aclProcessor.ProcessACL(resolvedSearchResult, entry).ToArray();
+                ret.IsACLProtected = _aclProcessor.IsACLProtected(entry);
+                ret.Properties.Add("isaclprotected", ret.IsACLProtected);
+            }
+
+            if ((_methods & ResolvedCollectionMethod.ObjectProps) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
+            {
+                var certTemplatesProps = LDAPPropertyProcessor.ReadCertTemplateProperties(entry);
+                ret.Properties.Merge(certTemplatesProps);
+            }
+
+            if ((_methods & ResolvedCollectionMethod.Container) != 0 || (_methods & ResolvedCollectionMethod.CertServices) != 0)
+            {
+                ret.ContainedBy = _containerProcessor.GetContainingObject(entry.DistinguishedName);
+            }
 
             return ret;
         }
