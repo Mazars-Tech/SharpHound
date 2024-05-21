@@ -198,6 +198,7 @@ namespace Sharphound
                     CollectionMethodOptions.CARegistry => ResolvedCollectionMethod.CARegistry,
                     CollectionMethodOptions.DCRegistry => ResolvedCollectionMethod.DCRegistry,
                     CollectionMethodOptions.CertServices => ResolvedCollectionMethod.CertServices,
+                    CollectionMethodOptions.Misc => ResolvedCollectionMethod.Misc,
                     CollectionMethodOptions.All => ResolvedCollectionMethod.All,
                     CollectionMethodOptions.None => ResolvedCollectionMethod.None,
                     _ => throw new ArgumentOutOfRangeException()
